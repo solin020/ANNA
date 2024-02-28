@@ -164,7 +164,7 @@ async def scheduled_call_task(start_time:datetime, phone_number:str, rejects:int
 
 
 
-@app.post('/schedule-call', dependencies=[Depends(get_current_username)])
+@app.post('/schedule-call', )
 async def schedule_call(t:ScheduledCall):
     await scheduled_call_task(t.time, t.phone_number, 0)
     return Response('OK', media_type='text/plain')
@@ -182,7 +182,7 @@ async def schedule_calls(p:Participant):
 
 
 
-@app.post('/schedule_calls',dependencies=[Depends(get_current_username)])
+@app.post('/schedule_calls',)
 async def post_schedule_calls(phone_number:str, start_date:datetime, end_date:datetime, 
         morning_time:int, afternoon_time:int,evening_time:int,
         morning_minute:int, afternoon_minute:int,evening_minute:int):
@@ -193,7 +193,7 @@ async def post_schedule_calls(phone_number:str, start_date:datetime, end_date:da
     return Response('OK', media_type='text/plain')
     
 
-@app.post('/cancel-call',dependencies=[Depends(get_current_username)])
+@app.post('/cancel-call',)
 async def cancel_call(t:ScheduledCall):
     jobid = t.id
     try:
@@ -213,7 +213,7 @@ async def cancel_call(t:ScheduledCall):
     except NoResultFound:
         pass
 
-@app.post('/cancel-calls',dependencies=[Depends(get_current_username)])
+@app.post('/cancel-calls',)
 async def cancel_schedule_calls(phone_number: str):
     with Session(engine) as s:
         statement = select(ScheduledCall).where(ScheduledCall.phone_number == phone_number)
@@ -229,28 +229,31 @@ async def cancel_schedule_calls(phone_number: str):
         s.commit()
 
 
-@app.get('/list-scheduled-calls',dependencies=[Depends(get_current_username)])
+@app.get('/list-scheduled-calls',)
 async def list_schedule_calls(phone_number: str) -> list[ScheduledCall]:
     with Session(engine) as s:
         statement = select(ScheduledCall).where(ScheduledCall.phone_number == phone_number).where(ScheduledCall.time > datetime.now()).order_by(ScheduledCall.time)
         results = s.exec(statement)
         return results.all()
 
-@app.get('/entire-schedule',dependencies=[Depends(get_current_username)])
+@app.get('/entire-schedule',)
 async def entire_schedule() -> list[Job]:
     return await parse_atq()
 
 
-@app.post('/add-participant',dependencies=[Depends(get_current_username)])
+@app.post('/add-participant',)
 async def add_participant(p: Participant):
     pn = phonenumbers.parse(p.phone_number, "US")
     #this accounts for variability in phone number formatting
     adjusted_pn = f'+{pn.country_code}{pn.national_number}'
     p.phone_number = adjusted_pn
     await schedule_calls(p)
+    with Session(engine) as s:
+        s.add(p)
+        s.commit()
     return Response('OK', media_type='text/plain')
 
-@app.post('/delete-participant',dependencies=[Depends(get_current_username)])
+@app.post('/delete-participant',)
 async def delete_participant(participant_study_id: str, phone_number:str):
     with Session(engine) as s:
         p_statement = select(Participant).where(Participant.phone_number==phone_number).where(Participant.participant_study_id==participant_study_id)
@@ -258,10 +261,10 @@ async def delete_participant(participant_study_id: str, phone_number:str):
         sc_statements = select(ScheduledCall).where(ScheduledCall.phone_number == phone_number)
         cl_statements = select(CallLog).where(CallLog.phone_number == phone_number)
         sc_results = s.exec(sc_statements).all()
-        for call in results:
+        for call in sc_results:
             if call.time > datetime.now():
                 try:
-                    jobid = scheduled_calls.pop(call.id)
+                    jobid = call.id
                     os.system(f'at -r {jobid}')
                 except Exception as e:
                     print(e)
@@ -280,7 +283,7 @@ async def delete_participant(participant_study_id: str, phone_number:str):
 
 #region Web Portal
 
-@app.get('/api/call-log',dependencies=[Depends(get_current_username)])
+@app.get('/api/call-log',)
 async def api_call_log(call_sid:str) -> CallLog:
     with Session(engine) as s:
         statement = select(CallLog).filter(CallLog.call_sid == call_sid)
@@ -293,7 +296,7 @@ class CallLogHeader(SQLModel):
     participant_study_id:str
     timestamp: datetime
 
-@app.get('/api/call-list',dependencies=[Depends(get_current_username)])
+@app.get('/api/call-list',)
 async def api_call_list(participant_study_id:str) -> list[CallLogHeader]:
     with Session(engine) as s:
         print(f'{participant_study_id=}')
@@ -305,7 +308,7 @@ async def api_call_list(participant_study_id:str) -> list[CallLogHeader]:
             for call_sid, participant_study_id, timestamp in call_logs
         ]
 
-@app.get('/api/participant-list',dependencies=[Depends(get_current_username)])
+@app.get('/api/participant-list',)
 async def api_participant_list() -> list[Participant]:
     with Session(engine) as s:
         statement = select(Participant)
@@ -316,24 +319,8 @@ async def api_participant_list() -> list[Participant]:
 
 
 
-class AuthStaticFiles(StaticFiles):
-    def __init__(self, *args, **kwargs) -> None:
 
-        super().__init__(*args, **kwargs)
-
-    def is_not_modified(self, response_headers, request_headers):
-        # your own cache rules goes here...
-        return False
-
-    async def __call__(self, scope, receive, send) -> None:
-
-        assert scope["type"] == "http"
-
-        request = Request(scope, receive)
-        await get_current_username(request)
-        await super().__call__(scope, receive, send)
-
-@app.get("/", dependencies=[Depends(get_current_username)])
+@app.get("/", )
 async def read_index1():
     return FileResponse(os.path.join(frontend_directory, 'dist/index.html'))
 
@@ -341,9 +328,9 @@ async def read_index1():
 async def read_index2():
     return FileResponse(os.path.join(frontend_directory, 'dist/favicon.ico'))
 
-app.mount("/assets", AuthStaticFiles(directory=os.path.join(frontend_directory, 'dist/assets')), name="dist")
-app.mount("/src", AuthStaticFiles(directory=os.path.join(frontend_directory, 'src')), name="src")
-app.mount("/recordings", AuthStaticFiles(directory=call_recordings_directory), name="recordings")
-app.mount("/", AuthStaticFiles(directory=os.path.join(frontend_directory, 'public')), name="public") 
+app.mount("/assets", StaticFiles(directory=os.path.join(frontend_directory, 'dist/assets')), name="dist")
+app.mount("/src", StaticFiles(directory=os.path.join(frontend_directory, 'src')), name="src")
+app.mount("/recordings", StaticFiles(directory=call_recordings_directory), name="recordings")
+app.mount("/", StaticFiles(directory=os.path.join(frontend_directory, 'public')), name="public") 
 #endregion
 
