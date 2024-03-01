@@ -353,7 +353,6 @@ class CallState:
                                 await_silence=True,
                                 silence_window=2, stopword_list=['continue'])
         await self.ask("Thank you for sharing. Is there anything else you want to share about your day so far?", await_silence=True, minimum_turn_time=5, stopword_list=['continue'], wait_time=30)
-        random.seed(hash(self.phone_number))
         topic_array = random.sample(topics, k=len(topics))
         topic = topics[self.previous_calls % len(topics)]
         topic_question = (f"Thank you for sharing. Now, I would like to ask you to tell me as much as you are able about {topic}. "
@@ -449,7 +448,6 @@ class CallState:
                                 await_silence=True,
                                 silence_window=2, stopword_list=['continue'], wait_time=30)
         await self.ask("Thank you for sharing. Is there anything else you want to share about your day so far?", await_silence=True, minimum_turn_time=5, stopword_list=['continue'], wait_time=30)
-        random.seed(hash(self.phone_number))
         topic_array = random.sample(topics, k=len(topics))
         topic = topics[self.previous_calls % len(topics)]
         topic_question = (f"Thank you for sharing. Now, I would like to ask you to tell me as much as you are able about {topic}. "
