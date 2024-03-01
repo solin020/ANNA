@@ -466,7 +466,7 @@ class CallState:
         #word list recall task
         await self.ask_permission("Thank you. Now, I am going to ask you to remember a list of six words. Are you ready?")
         await self.say("Here is the list.")
-        word_files = random.choices(MEMORY_WORDS, k=6)
+        word_files = random.sample(MEMORY_WORDS, k=6)
         self.call_log.memory_exercise_words = [w.split('.')[0] for w in word_files]
         for w in word_files:
             await self.controller.play_file(os.path.join(word_recordings_directory,w), final_pause=1.0, initial_pause=0.5)
