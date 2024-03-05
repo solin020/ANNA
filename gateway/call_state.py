@@ -169,7 +169,7 @@ class CallState:
             stderr=asyncio.subprocess.PIPE
         )
         print(await proc.communicate(), flush=True)
-        if self.call_log.previous_rejects < 2 and self.call_log.rejected !='completed':
+        if self.call_log.previous_rejects < 1 and self.call_log.rejected !='completed':
             await self.reschedule_call(self.call_log.previous_rejects+1)
         with Session(engine) as s:
             s.add(self.call_log)
