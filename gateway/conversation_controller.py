@@ -80,6 +80,8 @@ class ConversationController(ABC):
 
     async def await_silence(self, *args, **kwargs):
         force_end = asyncio.ensure_future(asyncio.sleep(70))
+        if 'minimum_turn_time' in kwargs:
+            await asyncio.sleep(kwargs['minimum_turn_time'])
         silence_window_vadframes = int(TURN_WAIT_INTERVAL//0.03)
         observation_window = collections.deque(maxlen=silence_window_vadframes)
         self.vad_pos = len(self.participant_track)
