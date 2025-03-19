@@ -133,39 +133,43 @@ class ConversationController(ABC):
 
 
  
-    async def play_file(self, file_:str, final_pause:float=0, initial_pause:float=0.5):
-        cmd  = f"cp {file_} {self.temp_file}"
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        so, se = await proc.communicate()
-        print(se, flush=True)
+
+
+
+    async def say(self, history, quote:str = "", file:str = "", final_pause:float=0, initial_pause:float=0.5, start_label:str="", end_label:str=""):
+        if quote:
+            async with tts_lock:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f'{tts_url}/generate', json=quote) as resp:
+                        async with aiofiles.open(f'{self.temp_file}', 'wb+') as f:
+                            resp_bytes = await resp.read()
+                            await f.write(resp_bytes)
+        elif file:
+            cmd = f"cp {file} {self.temp_file}"
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            so, se = await proc.communicate()
         await self.pause(initial_pause)
+        if start_label:
+            history.append(("START_LABEL", start_label, len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
         await self.send_outbound()
+        if end_label:
+            history.append(("END_LABEL", end_label, len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
         await self.pause(final_pause)
         return len(self.outbound_bytes) 
 
-
-    async def say(self, quote:str, final_pause:float=0, initial_pause:float=0.5):
-        async with tts_lock:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f'{tts_url}/generate', json=quote) as resp:
-                    async with aiofiles.open(f'{self.temp_file}', 'wb+') as f:
-                        resp_bytes = await resp.read()
-                        await f.write(resp_bytes)
-        await self.pause(initial_pause)
-        await self.send_outbound()
-        await self.pause(final_pause)
-        return len(self.outbound_bytes) 
-
-    async def ask(self, question, file=None, await_silence=False, stopword_list=None, wait_time=30, minimum_turn_time=3, silence_window=1, 
-            final_transcribe=True, final_pause=0.5,return_stopword=False):
+    async def ask(self, question, history, file="", await_silence=False, stopword_list=None, wait_time=30, minimum_turn_time=3, silence_window=1, 
+            final_transcribe=True, final_pause=0.5,return_stopword=False, start_label="", end_label=""):
+        
         assert (await_silence or stopword_list or wait_time), "The bot must be listening for something"
-        end_speech_pos = await self.say(question, final_pause=final_pause)
-        if file is not None:
-            end_speech_pos = await self.play_file(file)
+        if not file:
+            end_speech_pos = await self.say(quote=question, final_pause=final_pause, file=file, history=history, start_label=start_label, end_label=end_label)
+        else:
+            await self.say(quote=question, final_pause=final_pause, file=file, history=history, start_label=start_label)
+            end_speech_pos = await self.say(final_pause=final_pause, file=file, history=history, end_label=end_label)
         await self.add_timer(end_speech_pos).wait()
         print("asked", question)
         start_timepoint = len(self.participant_track)
@@ -187,7 +191,6 @@ class ConversationController(ABC):
             async with session.post(f'{stt_url}/process-bytes', data=send_bytes) as resp:
                 callee_says = await resp.text()
                 print("callee", callee_says, flush=True)
-                self.conversation_log.append(f"callee: {callee_says}")
                 retval = callee_says
         return retval
 
@@ -218,6 +221,7 @@ class ConversationController(ABC):
  
 
     async def send_outbound(self):
+        print('got to send_outbound', flush=True)
         proc = await asyncio.create_subprocess_shell(
             self.ffmpeg_convert_to_outbound,
             stdout=asyncio.subprocess.PIPE,

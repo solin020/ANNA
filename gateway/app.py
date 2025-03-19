@@ -24,11 +24,37 @@ import phonenumbers
 import subprocess
 import re
 from .parse_atq import parse_atq
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+import json
+
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
 #region authentication
 
 app = FastAPI()
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+app.add_middleware(NoCacheMiddleware)
+
+origins = ['*',]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 security = HTTPBasic()
 
@@ -69,17 +95,13 @@ async def begin_stream_conversation(number, previous_rejects):
 
 @app.route('/stream-conversation-receive', methods=['POST',])
 async def stream_conversation_receive(request):
-    from .call_state import phonebot_lock
     form = await request.form()
     vr = VoiceResponse()
-    if not phonebot_lock.locked():
-        call_sid = form['CallSid']
-        call_dict[call_sid] = await CallState.inbound_call(form)
-        connect = Connect()
-        connect.stream(url=f'{wss_url}/stream-conversation-socket')
-        vr.append(connect)
-    else:
-        vr.reject(reason='busy')
+    call_sid = form['CallSid']
+    call_dict[call_sid] = await CallState.inbound_call(form)
+    connect = Connect()
+    connect.stream(url=f'{wss_url}/stream-conversation-socket')
+    vr.append(connect)
     return Response(vr.__str__(), media_type='application/xml')
 
 @app.websocket_route('/stream-conversation-socket')
@@ -279,12 +301,14 @@ async def delete_participant(participant_study_id: str, phone_number:str):
 
 
 
+
+
 #endregion
 
 #region Web Portal
 
 @app.get('/api/call-log',)
-async def api_call_log(call_sid:str) -> CallLog:
+async def api_call_log(call_sid:str):
     with Session(engine) as s:
         statement = select(CallLog).filter(CallLog.call_sid == call_sid)
         result = s.exec(statement).one()
@@ -300,7 +324,8 @@ class CallLogHeader(SQLModel):
 async def api_call_list(participant_study_id:str) -> list[CallLogHeader]:
     with Session(engine) as s:
         print(f'{participant_study_id=}')
-        statement = select(CallLog.call_sid, CallLog.participant_study_id, CallLog.timestamp).where(CallLog.participant_study_id == participant_study_id).order_by(CallLog.timestamp)
+        participant = s.exec(select(Participant).where(Participant.participant_study_id == participant_study_id)).one()
+        statement = select(CallLog.call_sid, CallLog.participant_study_id, CallLog.timestamp).where(CallLog.phone_number == participant.phone_number).order_by(CallLog.timestamp)
         call_logs = s.exec(statement).all()
         return [CallLogHeader(
                 call_sid=call_sid, participant_study_id=participant_study_id, timestamp=timestamp
@@ -317,7 +342,37 @@ async def api_participant_list() -> list[Participant]:
 
 
 
+@app.get('/list-mp3s')
+async def list_wavs():
+    retdict = {}
+    for f in os.listdir(call_recordings_directory):
+        prefix = f.split('.')[0]
+        if prefix not in retdict:
+            retdict[prefix] = {'audio':False, 'autoSegmentation':False, 'manualSegmentation':False}
+        if f.endswith('.mp3') or f.endswith('.wav'):
+            retdict[prefix]['audio'] = f
+        elif f.endswith('.auto.json'):
+            retdict[prefix]['autoSegmentation'] = f
+        elif f.endswith('.manual.json'):
+            retdict[prefix]['manualSegmentation'] = f
+    return retdict
 
+
+@app.route('/save-manual-segmentation', methods=['POST'])
+async def save_manual_segmentation(r:Request):
+    form = await r.form()
+    filenamePrefix = form['filenamePrefix']
+    manualSegmentationJson = form['manualSegmentationJson']
+    with open(f'{call_recordings_directory}/{filenamePrefix}.manual.json', 'w+') as f:
+        f.write(manualSegmentationJson)
+    with open(f'{call_recordings_directory}/{filenamePrefix}.manual.txt', 'w+') as f:
+        for line in json.loads(manualSegmentationJson):
+            label = line['label']
+            start = line['start']
+            end = line['end']
+            f.write(f'{label}\t{start}\t{end}\n')
+    return Response('OK')
+    
 
 
 @app.get("/", )
