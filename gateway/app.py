@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from sqlmodel import SQLModel
 import base64
 from typing import Union, Annotated
-from ..config import frontend_directory, call_recordings_directory, gateway_username, gateway_password
+from ..config import frontend_directory, call_recordings_directory, gateway_username, gateway_password, anna_segmenter_directory, anna_segmenter_assets
 from starlette.responses import FileResponse 
 import phonenumbers
 import subprocess
@@ -93,6 +93,9 @@ async def begin_stream_conversation(number, previous_rejects):
     call =  await CallState.outbound_call(number, previous_rejects)
     call_dict[call.call_sid] = call
 
+
+
+
 @app.route('/stream-conversation-receive', methods=['POST',])
 async def stream_conversation_receive(request):
     form = await request.form()
@@ -119,6 +122,11 @@ async def stream_conversation_socket(websocket):
             elif frame['event'] == 'start':
                 stream_sid = frame['start']['streamSid']
                 call_sid = frame['start']['callSid']
+            elif frame['event'] == 'dtmf':
+                print('got dtmf', frame['dtmf']['digit'])
+                if call_sid in call_dict:
+                    call_state = call_dict[call_sid]
+                    await call_state.controller.dtmf_queue.put(frame['dtmf']['digit'])
             elif frame['event'] == 'media':
                 if call_sid in call_dict:
                     call_state = call_dict[call_sid]
@@ -146,9 +154,6 @@ async def stream_conversation_socket(websocket):
         print('connection closed disgracefully', flush=True)
     except EndCall:
         print('call ended')
-    finally:
-        await call_dict[call_sid].try_end()
-        call_dict.pop(call_sid)
 
 @app.post('/call-status')
 async def call_status(r:Request):
@@ -342,13 +347,25 @@ async def api_participant_list() -> list[Participant]:
 
 
 
-@app.get('/list-mp3s')
+
+
+
+@app.get('/anna-segmenter/list-mp3s')
 async def list_wavs():
-    retdict = {}
+    with Session(engine) as s:
+        call_logs = [cl for cl in s.exec(
+                select(CallLog.call_sid, CallLog.participant_study_id, CallLog.timestamp, CallLog.rejected).order_by(CallLog.participant_study_id, CallLog.timestamp)
+            ).all()
+            if (cl.participant_study_id != 'JacobSolinsky') and ('test' not in cl.participant_study_id ) and (cl.rejected == 'completed')
+        ] 
+    retdict = {f'bot_{cl.call_sid}':
+        {'participant_study_id':cl.participant_study_id, 'timestamp':str(cl.timestamp), 'audio':False, 'autoSegmentation':False,'manualSegmentation': False} 
+        for cl in call_logs
+    }
     for f in os.listdir(call_recordings_directory):
         prefix = f.split('.')[0]
         if prefix not in retdict:
-            retdict[prefix] = {'audio':False, 'autoSegmentation':False, 'manualSegmentation':False}
+            continue
         if f.endswith('.mp3') or f.endswith('.wav'):
             retdict[prefix]['audio'] = f
         elif f.endswith('.auto.json'):
@@ -358,14 +375,14 @@ async def list_wavs():
     return retdict
 
 
-@app.route('/save-manual-segmentation', methods=['POST'])
+@app.route('/anna-segmenter/save-manual-segmentation', methods=['POST'])
 async def save_manual_segmentation(r:Request):
     form = await r.form()
     filenamePrefix = form['filenamePrefix']
     manualSegmentationJson = form['manualSegmentationJson']
     with open(f'{call_recordings_directory}/{filenamePrefix}.manual.json', 'w+') as f:
         f.write(manualSegmentationJson)
-    with open(f'{call_recordings_directory}/{filenamePrefix}.manual.txt', 'w+') as f:
+    with open(f'{call_recordings_directory}/{filenamePrefix}.manual.seg', 'w+') as f:
         for line in json.loads(manualSegmentationJson):
             label = line['label']
             start = line['start']
@@ -374,6 +391,13 @@ async def save_manual_segmentation(r:Request):
     return Response('OK')
     
 
+@app.route('/anna-segmenter/index.html', methods=['GET'])
+async def read_anna_segmenter(r:Request):
+    return FileResponse(os.path.join(anna_segmenter_directory, 'index.html'))
+
+@app.route('/anna-segmenter/vite.svg', methods=['GET'])
+async def read_anna_svg(r:Request):
+    return FileResponse(os.path.join(anna_segmenter_directory, 'vite.svg'))
 
 @app.get("/", )
 async def read_index1():
@@ -386,6 +410,8 @@ async def read_index2():
 app.mount("/assets", StaticFiles(directory=os.path.join(frontend_directory, 'dist/assets')), name="dist")
 app.mount("/src", StaticFiles(directory=os.path.join(frontend_directory, 'src')), name="src")
 app.mount("/recordings", StaticFiles(directory=call_recordings_directory), name="recordings")
+app.mount("/anna-segmenter/recordings", StaticFiles(directory=call_recordings_directory), name="recordings")
+app.mount("/anna-segmenter/assets", StaticFiles(directory=anna_segmenter_assets), name="recordings")
 app.mount("/", StaticFiles(directory=os.path.join(frontend_directory, 'public')), name="public") 
 #endregion
 

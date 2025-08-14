@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from starlette.config import Config
 from sqlalchemy.types import JSON
 from sqlalchemy.schema import Column
 from typing import Dict, Optional, List, Any
@@ -8,8 +7,6 @@ from typing_extensions import TypedDict
 from sqlmodel import Field, SQLModel, create_engine
 from sqlalchemy.engine import URL
 from ..config import db_username, db_password, db_host, db_name
-config = Config(".env")
-from sqlalchemy.engine import URL
 url_object = URL.create(
     "postgresql",
     username=db_username,
@@ -48,8 +45,16 @@ class CallLog(SQLModel, table=True):
     memory_grade_2: dict = Field(sa_column=Column(JSON), default={})
     l_reply: Optional[str] = Field(default=None)
     l_grade: dict = Field(sa_column=Column(JSON), default={})
+    c_reply: Optional[str] = Field(default=None)
+    c_grade: Optional[dict] = Field(sa_column=Column(JSON), default={})
+    f_reply: Optional[str] = Field(default=None)
+    f_grade: Optional[dict] = Field(sa_column=Column(JSON), default={})
     animal_reply: Optional[str] = Field(default=None)
-    animal_grade: dict = Field(sa_column=Column(JSON), default={})
+    animal_grade: Optional[dict] = Field(sa_column=Column(JSON), default={})
+    fruit_reply: Optional[str] = Field(default=None)
+    fruit_grade: Optional[dict] = Field(sa_column=Column(JSON), default={})
+    vegetable_reply: Optional[str] = Field(default=None)
+    vegetable_grade: Optional[dict] = Field(sa_column=Column(JSON), default={})
     dysarthria_grade: Optional[float] = Field(default=None)
     miscellaneous: dict = Field(sa_column=Column(JSON), default={})
 

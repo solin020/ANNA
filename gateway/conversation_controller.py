@@ -40,6 +40,7 @@ class ConversationController(ABC):
         self.turn_switch = None
         self.temp_file = f'{uuid.uuid4()}.wav'
         self.output_file = f'{uuid.uuid4()}.wav'
+        self.dtmf_queue = asyncio.Queue()
 
 
 
@@ -123,6 +124,19 @@ class ConversationController(ABC):
         await asyncio.sleep(time)
         return True
     
+    async def await_dtmf(self, history, num_digits=None, end_character = None):
+        self.dtmf_queue = asyncio.Queue()
+        retval = ''
+        while True:
+            appendee = await self.dtmf_queue.get()
+            history.append(('DTMF_PRESS', appendee, len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
+            retval += appendee
+            if num_digits is not None and len(retval) >= num_digits:
+                return retval
+            elif end_character is not None and end_character in retval:
+                return retval
+
+    
 
 
 
@@ -154,16 +168,19 @@ class ConversationController(ABC):
             so, se = await proc.communicate()
         await self.pause(initial_pause)
         if start_label:
-            history.append(("START_LABEL", start_label, len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
+            history.append(("START_LABEL", start_label))
+        history.append(('START_SAY_TIMESTAMP',len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
+        history.append(("SYSTEM", quote))
         await self.send_outbound()
         if end_label:
-            history.append(("END_LABEL", end_label, len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
+            history.append(('END_LABEL', end_label))
+        history.append(('END_SAY_TIMESTAMP', len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
         await self.pause(final_pause)
         return len(self.outbound_bytes) 
 
     async def ask(self, question, history, file="", await_silence=False, stopword_list=None, wait_time=30, minimum_turn_time=3, silence_window=1, 
-            final_transcribe=True, final_pause=0.5,return_stopword=False, start_label="", end_label=""):
-        
+            final_transcribe=True, final_pause=0.5,return_stopword=False, start_label="", end_label="",
+            dtmf_wait_digits = None, dtmf_wait_character = None):
         assert (await_silence or stopword_list or wait_time), "The bot must be listening for something"
         if not file:
             end_speech_pos = await self.say(quote=question, final_pause=final_pause, file=file, history=history, start_label=start_label, end_label=end_label)
@@ -172,6 +189,7 @@ class ConversationController(ABC):
             end_speech_pos = await self.say(final_pause=final_pause, file=file, history=history, end_label=end_label)
         await self.add_timer(end_speech_pos).wait()
         print("asked", question)
+        history.append(('START_LISTEN_TIMESTAMP', len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
         start_timepoint = len(self.participant_track)
         listeners = []
         if wait_time:
@@ -180,19 +198,25 @@ class ConversationController(ABC):
             listeners.append(self.await_stopword(stopword_list))
         if await_silence:
             listeners.append(self.await_silence(minimum_turn_time=minimum_turn_time, silence_window=silence_window))
+        if dtmf_wait_digits or dtmf_wait_character:
+            listeners.append(self.await_dtmf(history, num_digits=dtmf_wait_digits, end_character=dtmf_wait_character))
         done, pending = await asyncio.wait(listeners, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
         print('finished listening')
-        if return_stopword:
+        if dtmf_wait_digits or dtmf_wait_character:
             return done.pop().result()
+        history.append(('END_LISTEN_TIMESTAMP', len(self.outbound_bytes) / (self.OUTBOUND_BYTE_WIDTH * self.OUTBOUND_SAMPLE_RATE)))
         send_bytes = self.participant_track[start_timepoint:]
         async with aiohttp.ClientSession() as session:
             async with session.post(f'{stt_url}/process-bytes', data=send_bytes) as resp:
                 callee_says = await resp.text()
                 print("callee", callee_says, flush=True)
                 retval = callee_says
-        return retval
+        if return_stopword:
+            return done.pop().result()
+        else:
+            return retval
 
     async def receive_inbound(self, received_bytes):
         self.participant_track.extend(self.convert_to_16khz(received_bytes))
